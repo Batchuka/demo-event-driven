@@ -1,0 +1,25 @@
+spring:
+  application:
+    name: orchestrator
+  main:
+    banner-mode: off
+  threads:
+    virtual:
+      enabled: true
+  web:
+    error:
+      include-message: always
+
+server:
+  port: 8080
+
+services:
+  finance-url: ${FINANCE_URL:http://localhost:8081}
+  customs-url: ${CUSTOMS_URL:http://localhost:8082}
+
+logging:
+  pattern:
+    console: "%d{HH:mm:ss.SSS} %-5level %msg%n"
+  level:
+    org.springframework: WARN
+    org.apache: WARN

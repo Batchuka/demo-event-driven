@@ -1,0 +1,28 @@
+spring:
+  application:
+    name: finance
+  main:
+    banner-mode: off
+  web:
+    locale: en
+    locale-resolver: fixed
+    error:
+      include-message: always
+      include-binding-errors: always
+
+server:
+  port: 8081
+
+event-bridge:
+  orchestrator-url: ${ORCHESTRATOR_URL:http://localhost:8080}
+
+app:
+  simulation:
+    delay: ${SIMULATION_DELAY:3s}
+
+logging:
+  pattern:
+    console: "%d{HH:mm:ss.SSS} %-5level %msg%n"
+  level:
+    org.springframework: WARN
+    org.apache: WARN
