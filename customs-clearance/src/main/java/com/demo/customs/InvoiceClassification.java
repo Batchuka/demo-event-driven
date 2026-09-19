@@ -5,14 +5,17 @@ import java.util.List;
 
 public record InvoiceClassification(
         String invoice,
-        String processId,
         Status status,
         List<ClassifiedItem> items,
-        Instant requestedAt,
-        Instant completedAt) {
+        Instant submittedAt,
+        Instant classifiedAt) {
 
-    public enum Status { CLASSIFYING, CLASSIFIED }
+    public enum Status { PENDING, CLASSIFYING, CLASSIFIED }
 
     public record ClassifiedItem(int item, String description, String hsCode) {
+    }
+
+    InvoiceClassification withStatus(Status newStatus) {
+        return new InvoiceClassification(invoice, newStatus, items, submittedAt, classifiedAt);
     }
 }

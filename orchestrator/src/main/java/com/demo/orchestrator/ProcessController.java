@@ -26,10 +26,11 @@ public class ProcessController {
         return processes.list();
     }
 
-    @GetMapping("/{id}")
-    Summary get(@PathVariable String id) {
-        return processes.find(id)
+    @GetMapping("/{invoice}")
+    Summary get(@PathVariable String invoice) {
+        return processes.find(invoice)
                 .map(ImportProcess::summary)
-                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Process " + id + " does not exist"));
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND,
+                        "There is no process for invoice " + invoice));
     }
 }

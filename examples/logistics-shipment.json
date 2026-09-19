@@ -1,8 +1,8 @@
 {
-  "container": "TGHU7654321",
-  "vessel": "MAERSK ELBA",
+  "container": "MSCU1234567",
+  "vessel": "MSC AURORA",
   "originPort": "Shanghai",
   "destinationPort": "Santos",
-  "invoice": "ABC-2026-0007",
+  "invoice": "XPTO-2026-0042",
   "estimatedArrival": "2026-10-02"
 }

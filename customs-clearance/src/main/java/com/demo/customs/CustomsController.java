@@ -1,6 +1,10 @@
 package com.demo.customs;
 
+import java.net.URI;
+import java.util.List;
+
 import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -11,20 +15,15 @@ import org.springframework.web.bind.annotation.RestController;
 
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
-import jakarta.validation.constraints.Pattern;
-import jakarta.validation.constraints.Positive;
 
 @RestController
-@RequestMapping("/customs/invoices/{invoice}")
+@RequestMapping("/customs")
 public class CustomsController {
 
-    public record ClassificationRequest(String processId) {
+    public record SubmitInvoice(@NotBlank String invoice) {
     }
 
-    public record HsCodeAmendment(
-            @Positive int item,
-            @NotBlank @Pattern(regexp = "\\d{4}\\.\\d{2}\\.\\d{2}", message = "HS code must follow the format 0000.00.00") String hsCode,
-            @NotBlank String reason) {
+    public record ClassificationRun(List<String> invoices) {
     }
 
     private final CustomsService service;
@@ -33,18 +32,20 @@ public class CustomsController {
         this.service = service;
     }
 
-    @PostMapping("/classify")
+    @PostMapping("/invoices")
+    ResponseEntity<InvoiceClassification> submit(@Valid @RequestBody SubmitInvoice body) {
+        var classification = service.submit(body.invoice());
+        return ResponseEntity.created(URI.create("/customs/invoices/" + classification.invoice()))
+                .body(classification);
+    }
+
+    @PostMapping("/classify-pending")
     @ResponseStatus(HttpStatus.ACCEPTED)
-    InvoiceClassification classify(@PathVariable String invoice, @RequestBody(required = false) ClassificationRequest body) {
-        return service.classify(invoice, body == null ? null : body.processId());
+    ClassificationRun classifyPending() {
+        return new ClassificationRun(service.classifyPending());
     }
 
-    @PostMapping("/amend-hs-code")
-    InvoiceClassification amendHsCode(@PathVariable String invoice, @Valid @RequestBody HsCodeAmendment body) {
-        return service.amendHsCode(invoice, body.item(), body.hsCode(), body.reason());
-    }
-
-    @GetMapping("/classification")
+    @GetMapping("/invoices/{invoice}")
     InvoiceClassification get(@PathVariable String invoice) {
         return service.get(invoice);
     }

@@ -1,7 +1,4 @@
 {
   "container": "MSCU1234567",
-  "vessel": "MSC AURORA",
-  "port": "Santos",
-  "invoice": "XPTO-2026-0042",
-  "terminalCharges": 4250.00
+  "port": "Santos"
 }

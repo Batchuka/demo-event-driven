@@ -1,7 +1,6 @@
 {
-  "processId": "MANUAL-001",
-  "payee": "Santos Maritime Agency",
-  "amount": 1800.50,
-  "currency": "BRL",
-  "reference": "Demurrage for container MSCU1234567"
+  "invoice": "XPTO-2026-0042",
+  "payee": "Santos Terminal",
+  "amount": 4250.00,
+  "currency": "BRL"
 }

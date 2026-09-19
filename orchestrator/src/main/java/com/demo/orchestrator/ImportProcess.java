@@ -5,16 +5,15 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 
+/** One import process, identified by the invoice that every service uses to correlate its events. */
 public class ImportProcess {
 
-    public enum Status { IN_PROGRESS, COMPLETED, FAILED, INTERRUPTED }
+    public enum Status { IN_PROGRESS, COMPLETED, FAILED }
 
     public record Step(Instant at, String description) {
     }
 
     public record Summary(
-            String id,
-            String container,
             String invoice,
             Status status,
             boolean paymentCompleted,
@@ -24,8 +23,6 @@ public class ImportProcess {
             List<Step> steps) {
     }
 
-    private final String id;
-    private final String container;
     private final String invoice;
     private final Instant startedAt = Instant.now();
     private final List<Step> steps = new ArrayList<>();
@@ -34,14 +31,12 @@ public class ImportProcess {
     private boolean goodsClassified;
     private Instant endedAt;
 
-    ImportProcess(String id, String container, String invoice) {
-        this.id = id;
-        this.container = container;
+    ImportProcess(String invoice) {
         this.invoice = invoice;
     }
 
-    public String id() {
-        return id;
+    public String invoice() {
+        return invoice;
     }
 
     public synchronized Status status() {
@@ -67,11 +62,10 @@ public class ImportProcess {
     }
 
     public synchronized void fail(String reason) {
+        if (status != Status.IN_PROGRESS) {
+            return;
+        }
         end(Status.FAILED, reason);
-    }
-
-    public synchronized void interrupt(String reason) {
-        end(Status.INTERRUPTED, reason);
     }
 
     public synchronized Duration duration() {
@@ -79,7 +73,7 @@ public class ImportProcess {
     }
 
     public synchronized Summary summary() {
-        return new Summary(id, container, invoice, status, paymentCompleted, goodsClassified, startedAt, endedAt,
+        return new Summary(invoice, status, paymentCompleted, goodsClassified, startedAt, endedAt,
                 List.copyOf(steps));
     }
 
@@ -92,9 +86,6 @@ public class ImportProcess {
     }
 
     private void end(Status newStatus, String description) {
-        if (status != Status.IN_PROGRESS) {
-            return;
-        }
         status = newStatus;
         endedAt = Instant.now();
         record(description);

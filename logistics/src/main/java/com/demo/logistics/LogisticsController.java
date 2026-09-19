@@ -1,6 +1,5 @@
 package com.demo.logistics;
 
-import java.math.BigDecimal;
 import java.net.URI;
 import java.time.LocalDate;
 
@@ -15,8 +14,6 @@ import org.springframework.web.bind.annotation.RestController;
 
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
-import jakarta.validation.constraints.NotNull;
-import jakarta.validation.constraints.PositiveOrZero;
 
 @RestController
 public class LogisticsController {
@@ -32,10 +29,7 @@ public class LogisticsController {
 
     public record TerminalArrivalNotice(
             @NotBlank String container,
-            @NotBlank String vessel,
-            @NotBlank String port,
-            @NotBlank String invoice,
-            @NotNull @PositiveOrZero BigDecimal terminalCharges) {
+            @NotBlank String port) {
     }
 
     private final TrackingService service;
@@ -54,8 +48,7 @@ public class LogisticsController {
     @PostMapping("/webhooks/terminal/cargo-arrival")
     @ResponseStatus(HttpStatus.ACCEPTED)
     OceanCargo cargoArrival(@Valid @RequestBody TerminalArrivalNotice notice) {
-        return service.registerArrival(notice.container(), notice.vessel(), notice.port(), notice.invoice(),
-                notice.terminalCharges());
+        return service.registerArrival(notice.container(), notice.port());
     }
 
     @GetMapping("/tracking/{container}")

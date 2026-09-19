@@ -1,15 +1,23 @@
 package com.demo.eventbridge;
 
 /**
- * Marks a Spring application event as an integration event: every event published through
- * {@code ApplicationEventPublisher} that implements this interface is forwarded to the orchestrator.
+ * Publish it with {@code ApplicationEventPublisher} and the library forwards it to the orchestrator.
+ *
+ * @param type          name of the event, which is what the orchestrator waits for
+ * @param correlationId business key that ties the event to the process it belongs to (e.g. an invoice number)
+ * @param data          optional payload: any object that serializes to JSON
  */
-public interface IntegrationEvent {
+public record IntegrationEvent(String type, String correlationId, Object data) {
 
-    String type();
+    public static IntegrationEvent of(String type) {
+        return new IntegrationEvent(type, null, null);
+    }
 
-    /** Identifier of the process the event belongs to, when there is one already. */
-    default String correlationId() {
-        return null;
+    public static IntegrationEvent of(String type, String correlationId) {
+        return new IntegrationEvent(type, correlationId, null);
+    }
+
+    public static IntegrationEvent of(String type, String correlationId, Object data) {
+        return new IntegrationEvent(type, correlationId, data);
     }
 }

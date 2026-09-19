@@ -19,6 +19,6 @@ public record EventEnvelope(
                 source,
                 event.correlationId(),
                 Instant.now(),
-                event);
+                event.data());
     }
 }

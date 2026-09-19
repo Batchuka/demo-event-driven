@@ -3,6 +3,7 @@ package com.demo.finance;
 import java.math.BigDecimal;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
@@ -19,6 +20,7 @@ import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.web.server.ResponseStatusException;
 
+import com.demo.eventbridge.IntegrationEvent;
 import com.demo.finance.PaymentRequest.Status;
 
 @Service
@@ -37,17 +39,13 @@ public class PaymentRequestService {
         this.timeToPay = timeToPay;
     }
 
-    public PaymentRequest open(String processId, String payee, BigDecimal amount, String currency,
-                               String reference) {
+    public PaymentRequest open(String invoice, String payee, BigDecimal amount, String currency) {
         var now = Instant.now();
-        var request = new PaymentRequest("PR-%04d".formatted(sequence.incrementAndGet()), processId, payee, amount,
-                currency, reference, Status.OPEN, now, now);
+        var request = new PaymentRequest("PR-%04d".formatted(sequence.incrementAndGet()), invoice, payee, amount,
+                currency, Status.PENDING, now, now);
         requests.put(request.id(), request);
-        log.info("[finance] payment request {} opened: pay {} {} to {} ({}) - process {}", request.id(), currency,
-                amount, payee, reference, processId);
-
-        CompletableFuture.runAsync(() -> pay(request.id()),
-                CompletableFuture.delayedExecutor(timeToPay.toMillis(), TimeUnit.MILLISECONDS));
+        log.info("[finance] payment request {} opened: {} {} to {} (invoice {}), pending payment", request.id(),
+                currency, amount, payee, invoice);
         return request;
     }
 
@@ -57,37 +55,36 @@ public class PaymentRequestService {
                         "Payment request " + id + " does not exist"));
     }
 
-    public PaymentRequest cancel(String id, String reason) {
-        var current = get(id);
-        var cancelled = transition(id, Status.CANCELLED);
-        if (cancelled == null) {
-            throw new ResponseStatusException(HttpStatus.CONFLICT,
-                    "Payment request " + id + " is " + get(id).status() + " and cannot be cancelled");
+    /** Looks for the pending payment requests and pays them; returns the ids it picked up. */
+    public List<String> payPending() {
+        var picked = requests.keySet().stream().sorted()
+                .filter(id -> transition(id, Status.PENDING, Status.PROCESSING) != null)
+                .toList();
+        if (picked.isEmpty()) {
+            log.info("[finance] payment run: no pending payment requests");
+            return picked;
         }
-        log.info("[finance] payment request {} cancelled: {}", id, reason);
-        events.publishEvent(new PaymentCancelledEvent(id, current.processId(), reason));
-        return cancelled;
+        log.info("[finance] payment run: paying {}", picked);
+        picked.forEach(id -> CompletableFuture.runAsync(() -> pay(id),
+                CompletableFuture.delayedExecutor(timeToPay.toMillis(), TimeUnit.MILLISECONDS)));
+        return picked;
     }
 
     private void pay(String id) {
-        var paid = transition(id, Status.PAID);
-        if (paid == null) {
-            log.info("[finance] payment request {} is no longer open, payment skipped", id);
-            return;
-        }
-        log.info("[finance] payment request {} PAID: {} {} to {}", id, paid.currency(), paid.amount(), paid.payee());
-        events.publishEvent(new PaymentCompletedEvent(id, paid.processId(), paid.payee(), paid.amount(),
-                paid.currency()));
+        var paid = transition(id, Status.PROCESSING, Status.PAID);
+        log.info("[finance] payment request {} PAID: {} {} to {} (invoice {})", id, paid.currency(), paid.amount(),
+                paid.payee(), paid.invoice());
+        events.publishEvent(IntegrationEvent.of("finance.payment-completed", paid.invoice()));
     }
 
-    /** Moves an OPEN request to the new status; returns null if it was not open. */
-    private PaymentRequest transition(String id, Status newStatus) {
+    /** Moves a request from one status to the next; returns null if it was not in the expected status. */
+    private PaymentRequest transition(String id, Status from, Status to) {
         var result = new AtomicReference<PaymentRequest>();
         requests.computeIfPresent(id, (key, current) -> {
-            if (current.status() != Status.OPEN) {
+            if (current.status() != from) {
                 return current;
             }
-            var updated = current.withStatus(newStatus);
+            var updated = current.withStatus(to);
             result.set(updated);
             return updated;
         });

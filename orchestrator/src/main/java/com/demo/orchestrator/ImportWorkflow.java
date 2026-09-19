@@ -15,22 +15,18 @@ import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Component;
 
 import com.demo.eventbridge.EventEnvelope;
-import com.demo.orchestrator.Events.CargoArrived;
-import com.demo.orchestrator.Events.GoodsClassified;
-import com.demo.orchestrator.Events.PaymentCancelled;
-import com.demo.orchestrator.Events.PaymentCompleted;
 import com.demo.orchestrator.ImportProcess.Status;
 
-import tools.jackson.databind.json.JsonMapper;
-
 /**
- * Workflow of the import process:
+ * Workflow of the import process. The orchestrator does not tell the services what to do or hand them any data: each
+ * one owns its work and its data. It only listens to events and lets the next services know they can act.
  * <ol>
- *   <li>logistics.cargo-arrived: opens the process and, in parallel, asks customs clearance to classify the
- *       goods and finance to open the payment of the terminal charges;</li>
+ *   <li>logistics.cargo-arrived: opens the process and, in parallel, tells customs clearance to classify its
+ *       pending invoices and finance to pay its pending payment requests;</li>
  *   <li>finance.payment-completed and customs.goods-classified: record each step;</li>
  *   <li>when both steps are done, the process is completed.</li>
  * </ol>
+ * The events of one process are tied together by their correlation id, which is the invoice number.
  */
 @Component
 public class ImportWorkflow implements AutoCloseable {
@@ -40,16 +36,13 @@ public class ImportWorkflow implements AutoCloseable {
     private final ProcessRepository processes;
     private final FinanceClient finance;
     private final CustomsClient customs;
-    private final JsonMapper json;
     private final Set<String> handledEvents = ConcurrentHashMap.newKeySet();
     private final ExecutorService inParallel = Executors.newVirtualThreadPerTaskExecutor();
 
-    public ImportWorkflow(ProcessRepository processes, FinanceClient finance, CustomsClient customs,
-                          JsonMapper json) {
+    public ImportWorkflow(ProcessRepository processes, FinanceClient finance, CustomsClient customs) {
         this.processes = processes;
         this.finance = finance;
         this.customs = customs;
-        this.json = json;
     }
 
     @Async
@@ -58,14 +51,13 @@ public class ImportWorkflow implements AutoCloseable {
             log.info("<< event {} ({}) was already handled, repeated delivery ignored", event.type(), event.id());
             return;
         }
-        log.info("<< event received: {} (source: {}, process: {})", event.type(), event.source(),
-                event.correlationId() != null ? event.correlationId() : "none yet");
+        log.info("<< event received: {} (source: {}, invoice: {})", event.type(), event.source(),
+                event.correlationId() != null ? event.correlationId() : "none");
         try {
             switch (event.type()) {
-                case Events.CARGO_ARRIVED -> onCargoArrived(data(event, CargoArrived.class));
-                case Events.PAYMENT_COMPLETED -> onPaymentCompleted(event, data(event, PaymentCompleted.class));
-                case Events.PAYMENT_CANCELLED -> onPaymentCancelled(event, data(event, PaymentCancelled.class));
-                case Events.GOODS_CLASSIFIED -> onGoodsClassified(event, data(event, GoodsClassified.class));
+                case Events.CARGO_ARRIVED -> onCargoArrived(event);
+                case Events.PAYMENT_COMPLETED -> onPaymentCompleted(event);
+                case Events.GOODS_CLASSIFIED -> onGoodsClassified(event);
                 default -> log.info("   no workflow step reacts to {}", event.type());
             }
         } catch (RuntimeException e) {
@@ -73,91 +65,77 @@ public class ImportWorkflow implements AutoCloseable {
         }
     }
 
-    private void onCargoArrived(CargoArrived cargo) {
-        var process = processes.start(cargo.container(), cargo.invoice());
-        var id = process.id();
-        log.info("[{}] NEW IMPORT PROCESS: container {} (vessel {}) arrived at {}, invoice {}", id,
-                cargo.container(), cargo.vessel(), cargo.port(), cargo.invoice());
-        process.record("cargo arrived at " + cargo.port());
-        log.info("[{}] workflow: cargo arrived => classify the goods and open the terminal charges payment, in parallel",
-                id);
+    private void onCargoArrived(EventEnvelope event) {
+        if (event.correlationId() == null) {
+            log.warn("   event {} carries no invoice to correlate the process with, ignored", event.type());
+            return;
+        }
+        var process = processes.start(event.correlationId());
+        var id = process.invoice();
+        log.info("[{}] NEW IMPORT PROCESS: the cargo arrived", id);
+        process.record("cargo arrived");
+        log.info("[{}] workflow: cargo arrived => customs clearance can classify and finance can pay, in parallel", id);
 
-        var classification = CompletableFuture.runAsync(() -> requestClassification(process, cargo), inParallel);
-        var payment = CompletableFuture.runAsync(() -> requestPayment(process, cargo), inParallel);
+        var classification = CompletableFuture.runAsync(() -> letCustomsClassify(process), inParallel);
+        var payment = CompletableFuture.runAsync(() -> letFinancePay(process), inParallel);
         CompletableFuture.allOf(classification, payment).join();
 
         if (process.status() == Status.IN_PROGRESS) {
-            log.info("[{}] requests sent, waiting for the finance and customs events", id);
+            log.info("[{}] services informed, waiting for the finance and customs events", id);
         }
     }
 
-    private void requestClassification(ImportProcess process, CargoArrived cargo) {
+    private void letCustomsClassify(ImportProcess process) {
         try {
-            log.info("[{}] -> customs-clearance: classify the goods of invoice {}", process.id(), cargo.invoice());
-            var response = customs.classifyGoods(cargo.invoice(), process.id());
-            log.info("[{}] <- customs-clearance accepted: invoice {} {}", process.id(), response.invoice(),
-                    response.status());
-            process.record("goods classification requested from customs clearance");
+            log.info("[{}] -> customs-clearance: you can classify your pending invoices", process.invoice());
+            customs.classifyPending();
+            log.info("[{}] <- customs-clearance accepted", process.invoice());
+            process.record("customs clearance informed");
         } catch (RuntimeException e) {
-            fail(process, "customs-clearance did not accept the classification request: " + reason(e));
+            fail(process, "customs-clearance did not accept the request: " + reason(e));
         }
     }
 
-    private void requestPayment(ImportProcess process, CargoArrived cargo) {
+    private void letFinancePay(ImportProcess process) {
         try {
-            var payee = cargo.port() + " Terminal";
-            log.info("[{}] -> finance: open a payment request of {} to {}", process.id(), cargo.terminalCharges(),
-                    payee);
-            var response = finance.openPaymentRequest(process.id(), payee, cargo.terminalCharges(), "BRL",
-                    "Terminal charges for container " + cargo.container());
-            log.info("[{}] <- finance accepted: payment request {} {}", process.id(), response.id(),
-                    response.status());
-            process.record("terminal charges payment requested from finance (" + response.id() + ")");
+            log.info("[{}] -> finance: you can pay your pending payment requests", process.invoice());
+            finance.payPending();
+            log.info("[{}] <- finance accepted", process.invoice());
+            process.record("finance informed");
         } catch (RuntimeException e) {
-            fail(process, "finance did not accept the payment request: " + reason(e));
+            fail(process, "finance did not accept the request: " + reason(e));
         }
     }
 
-    private void onPaymentCompleted(EventEnvelope event, PaymentCompleted payment) {
+    private void onPaymentCompleted(EventEnvelope event) {
         processOf(event).ifPresent(process -> {
-            log.info("[{}] payment {} completed: {} {} to {}", process.id(), payment.requestId(),
-                    payment.currency(), payment.amount(), payment.payee());
-            var completed = process.recordPayment("payment " + payment.requestId() + " completed");
+            log.info("[{}] payment completed", process.invoice());
+            var completed = process.recordPayment("payment completed");
             advance(process, completed, "the goods classification");
         });
     }
 
-    private void onGoodsClassified(EventEnvelope event, GoodsClassified classification) {
+    private void onGoodsClassified(EventEnvelope event) {
         processOf(event).ifPresent(process -> {
-            log.info("[{}] goods of invoice {} classified ({} items)", process.id(), classification.invoice(),
-                    classification.items().size());
-            var completed = process.recordClassification("goods of invoice " + classification.invoice()
-                    + " classified");
-            advance(process, completed, "the payment of the terminal charges");
-        });
-    }
-
-    private void onPaymentCancelled(EventEnvelope event, PaymentCancelled cancellation) {
-        processOf(event).ifPresent(process -> {
-            log.warn("[{}] payment {} cancelled ({}), process interrupted", process.id(),
-                    cancellation.requestId(), cancellation.reason());
-            process.interrupt("payment " + cancellation.requestId() + " cancelled: " + cancellation.reason());
+            log.info("[{}] goods classified", process.invoice());
+            var completed = process.recordClassification("goods classified");
+            advance(process, completed, "the payment");
         });
     }
 
     private void advance(ImportProcess process, boolean completed, String pending) {
         if (completed) {
-            log.info("[{}] ============================================================", process.id());
-            log.info("[{}] IMPORT PROCESS COMPLETED in {}s: payment completed and goods classified", process.id(),
-                    String.format(Locale.ROOT, "%.1f", process.duration().toMillis() / 1000.0));
-            log.info("[{}] ============================================================", process.id());
+            log.info("[{}] ============================================================", process.invoice());
+            log.info("[{}] IMPORT PROCESS COMPLETED in {}s: payment completed and goods classified",
+                    process.invoice(), String.format(Locale.ROOT, "%.1f", process.duration().toMillis() / 1000.0));
+            log.info("[{}] ============================================================", process.invoice());
         } else if (process.status() == Status.IN_PROGRESS) {
-            log.info("[{}] waiting for {}", process.id(), pending);
+            log.info("[{}] waiting for {}", process.invoice(), pending);
         }
     }
 
     private void fail(ImportProcess process, String reason) {
-        log.error("[{}] {}", process.id(), reason);
+        log.error("[{}] {}", process.invoice(), reason);
         process.fail(reason);
     }
 
@@ -173,10 +151,6 @@ public class ImportWorkflow implements AutoCloseable {
             log.warn("   event {} does not belong to any known process, ignored", event.type());
         }
         return process;
-    }
-
-    private <T> T data(EventEnvelope event, Class<T> type) {
-        return json.convertValue(event.data(), type);
     }
 
     @Override
